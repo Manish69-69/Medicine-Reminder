@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Medicine Reminder & Progress</title>
+  <style>
+    :root{--bg:#f6f8fa;--card:#ffffff;--accent:#2563eb;--muted:#6b7280}
+    *{box-sizing:border-box}
+    body{font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial;margin:0;background:var(--bg);color:#111}
+    .container{max-width:980px;margin:28px auto;padding:20px}
+    header{display:flex;align-items:center;gap:16px}
+    h1{margin:0;font-size:1.4rem}
+    .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(16,24,40,0.06);}
+    form{display:grid;grid-template-columns:1fr 140px 110px;gap:10px;align-items:end}
+    label{font-size:0.8rem;color:var(--muted);display:block;margin-bottom:6px}
+    input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #e6e9ee}
+    button{padding:10px 12px;border-radius:8px;border:0;background:var(--accent);color:#fff;cursor:pointer}
+    .list{margin-top:14px;display:grid;gap:10px}
+    .med-row{display:flex;gap:10px;align-items:center;padding:10px;border-radius:10px;border:1px solid #eef2ff}
+    .med-info{flex:1}
+    .times{font-size:0.85rem;color:var(--muted)}
+    .progress-wrap{display:flex;gap:10px;align-items:center}
+    .progress{height:12px;background:#eee;border-radius:999px;flex:1;overflow:hidden}
+    .progress > span{display:block;height:100%;background:linear-gradient(90deg,var(--accent),#60a5fa);}
+    .small{font-size:0.85rem;color:var(--muted)}
+    .controls{display:flex;gap:8px}
+    .pill-btn{background:#f3f4f6;border:0;padding:8px 10px;border-radius:8px;cursor:pointer}
+    .danger{background:#ef4444;color:#fff}
+    .muted{color:var(--muted)}
+    footer{margin-top:18px;text-align:center;color:var(--muted);font-size:0.85rem}
+    @media(max-width:700px){form{grid-template-columns:1fr} .controls{flex-wrap:wrap}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%232563eb'/><path d='M12 6v6' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/><path d='M9 9h6' stroke='%23fff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>' alt=''/> 
+      <div>
+        <h1>Medicine Reminder & Progress</h1>
+        <div class="small">Add medicines, schedule reminders and track daily intake. Data stored locally in your browser.</div>
+      </div>
+    </header>
+
+    <section style="margin-top:18px" class="card">
+      <form id="addForm">
+        <div>
+          <label for="name">Medicine name</label>
+          <input id="name" required placeholder="e.g. Paracetamol" />
+        </div>
+        <div>
+          <label for="times">Times (HH:MM comma separated)</label>
+          <input id="times" required placeholder="08:00,13:00,20:30" />
+        </div>
+        <div>
+          <label for="dailyCount">Pills per day</label>
+          <input id="dailyCount" type="number" min="1" value="1" />
+        </div>
+        <div style="grid-column:1/-1;display:flex;gap:8px;margin-top:8px">
+          <button type="submit">Add / Update Medicine</button>
+          <button type="button" id="enableNotifications" class="pill-btn">Enable Notifications</button>
+          <button type="button" id="clearAll" class="pill-btn">Clear All</button>
+        </div>
+      </form>
+    </section>
+
+    <section style="margin-top:14px">
+      <div class="card">
+        <h3 style="margin-top:0">Your medicines</h3>
+        <div id="list" class="list"></div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h3 style="margin-top:0">Today's summary</h3>
+        <div style="display:flex;gap:12px;align-items:center">
+          <div style="flex:1">
+            <div class="small">Overall progress</div>
+            <div class="progress" aria-hidden>
+              <span id="overallBar" style="width:0%"></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:8px">
+              <div class="small" id="takenText">Taken: 0</div>
+              <div class="small" id="totalText">Total: 0</div>
+            </div>
+          </div>
+          <div style="width:220px">
+            <div class="small">Upcoming reminders</div>
+            <ul id="upcoming" class="small muted" style="margin:6px 0 0 18px;padding:0"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>Tip: Allow browser notifications. Reminders only work reliably while this page is open (or if you add a service worker & push notifications).</footer>
+  </div>
+
+  <script>
+    // Simple medicine reminder & tracker using localStorage.
+    // Data format in localStorage: medicines = [{id, name, times:['HH:MM'], dailyCount, logs:{'YYYY-MM-DD':takenCount}}]
+
+    const LS_KEY = 'medicines_v1';
+    const listEl = document.getElementById('list');
+    const addForm = document.getElementById('addForm');
+    const upcomingEl = document.getElementById('upcoming');
+    const overallBar = document.getElementById('overallBar');
+    const takenText = document.getElementById('takenText');
+    const totalText = document.getElementById('totalText');
+
+    function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+
+    function load(){
+      try{return JSON.parse(localStorage.getItem(LS_KEY))||[];}catch(e){return[]}
+    }
+    function save(data){localStorage.setItem(LS_KEY,JSON.stringify(data))}
+
+    function todayStr(){const d=new Date();return d.toISOString().slice(0,10)}
+
+    function render(){
+      const meds = load();
+      listEl.innerHTML='';
+      let totalNeeded=0, totalTaken=0;
+      meds.forEach(m=>{
+        const taken = (m.logs && m.logs[todayStr()]) || 0;
+        totalNeeded += (parseInt(m.dailyCount)||0);
+        totalTaken += taken;
+
+        const row = document.createElement('div'); row.className='med-row';
+        const info = document.createElement('div'); info.className='med-info';
+        info.innerHTML = `<strong>${escapeHtml(m.name)}</strong><div class="times">Times: ${m.times.join(', ')}</div>`;
+
+        const progressWrap = document.createElement('div'); progressWrap.className='progress-wrap';
+        const progress = document.createElement('div'); progress.className='progress';
+        const pct = Math.min(100, Math.round((taken/(m.dailyCount||1))*100));
+        const bar = document.createElement('span'); bar.style.width = pct+'%';
+        progress.appendChild(bar);
+        const details = document.createElement('div'); details.className='small'; details.style.width='98px'; details.innerText = `${taken}/${m.dailyCount}`;
+        progressWrap.appendChild(progress); progressWrap.appendChild(details);
+
+        const controls = document.createElement('div'); controls.className='controls';
+        const takeBtn = document.createElement('button'); takeBtn.className='pill-btn'; takeBtn.innerText='Mark taken';
+        takeBtn.onclick = ()=>{ markTaken(m.id); };
+        const editBtn = document.createElement('button'); editBtn.className='pill-btn'; editBtn.innerText='Edit';
+        editBtn.onclick = ()=>{ populateForm(m); window.scrollTo({top:0,behavior:'smooth'}); };
+        const delBtn = document.createElement('button'); delBtn.className='pill-btn danger'; delBtn.innerText='Delete';
+        delBtn.onclick = ()=>{ if(confirm('Delete this medicine?')){ deleteMed(m.id);} };
+        controls.appendChild(takeBtn); controls.appendChild(editBtn); controls.appendChild(delBtn);
+
+        row.appendChild(info); row.appendChild(progressWrap); row.appendChild(controls);
+        listEl.appendChild(row);
+      });
+
+      // overall
+      totalText.innerText = 'Total: '+totalNeeded;
+      takenText.innerText = 'Taken: '+totalTaken;
+      overallBar.style.width = (totalNeeded? Math.round(totalTaken/totalNeeded*100):0) + '%';
+
+      renderUpcoming();
+    }
+
+    function escapeHtml(s){return String(s).replace(/[&<>\"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+
+    function populateForm(m){
+      document.getElementById('name').value = m.name;
+      document.getElementById('times').value = m.times.join(',');
+      document.getElementById('dailyCount').value = m.dailyCount;
+      addForm.dataset.editId = m.id;
+    }
+
+    addForm.addEventListener('submit',e=>{
+      e.preventDefault();
+      const name = document.getElementById('name').value.trim();
+      const timesRaw = document.getElementById('times').value.trim();
+      const dailyCount = Math.max(1,parseInt(document.getElementById('dailyCount').value||1));
+      if(!name||!timesRaw){alert('Please fill name and times');return}
+      const times = timesRaw.split(',').map(s=>s.trim()).filter(Boolean).map(normalizeTime).filter(Boolean);
+      if(times.length===0){alert('Please provide valid times in HH:MM format');return}
+
+      const meds = load();
+      const editId = addForm.dataset.editId;
+      if(editId){
+        const idx = meds.findIndex(x=>x.id===editId);
+        if(idx!==-1){meds[idx].name=name;meds[idx].times=times;meds[idx].dailyCount=dailyCount}
+        delete addForm.dataset.editId;
+      } else {
+        meds.push({id:uid(),name,times,dailyCount,logs:{}});
+      }
+      save(meds);
+      addForm.reset();
+      render();
+      scheduleAllReminders();
+    });
+
+    document.getElementById('enableNotifications').addEventListener('click',async ()=>{
+      if(!('Notification' in window)){alert('Notifications not supported in this browser');return}
+      const perm = await Notification.requestPermission();
+      if(perm==='granted'){alert('Notifications enabled — keep this page open for reminders to fire.');scheduleAllReminders()}else{alert('Notifications denied or dismissed')}
+    });
+
+    document.getElementById('clearAll').addEventListener('click',()=>{if(confirm('Clear ALL data?')){localStorage.removeItem(LS_KEY);render();}}
+    );
+
+    function normalizeTime(t){
+      const m = t.match(/^(\d{1,2}):(\d{2})$/);
+      if(!m)return null; let hh = parseInt(m[1]), mm = parseInt(m[2]);
+      if(hh<0||hh>23||mm<0||mm>59) return null; return String(hh).padStart(2,'0')+':'+String(mm).padStart(2,'0');
+    }
+
+    function deleteMed(id){const meds=load().filter(m=>m.id!==id);save(meds);render();}
+
+    function markTaken(id){
+      const meds = load();
+      const m = meds.find(x=>x.id===id); if(!m) return;
+      const d=todayStr(); if(!m.logs) m.logs={}; m.logs[d]=(m.logs[d]||0)+1; save(meds); render();
+    }
+
+    function renderUpcoming(){
+      upcomingEl.innerHTML='';
+      const now = new Date();
+      const meds = load();
+      const upcoming = [];
+      meds.forEach(m=>{
+        m.times.forEach(tm=>{
+          const [hh,mm] = tm.split(':').map(Number);
+          const time = new Date(); time.setHours(hh,mm,0,0);
+          if(time>now){ upcoming.push({time, label:m.name+' @ '+tm}); }
+        })
+      });
+      upcoming.sort((a,b)=>a.time-b.time);
+      upcoming.slice(0,6).forEach(u=>{
+        const li = document.createElement('li'); li.innerText = u.label + ' — ' + u.time.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+        upcomingEl.appendChild(li);
+      });
+      if(upcoming.length===0) upcomingEl.innerHTML = '<li>None for the rest of today</li>';
+    }
+
+    // Reminders: schedule timers for today's times while the page is open. They will not fire reliably if the page is closed.
+    let scheduledTimers = [];
+    function clearTimers(){ scheduledTimers.forEach(id=>clearTimeout(id)); scheduledTimers=[]; }
+
+    function scheduleAllReminders(){
+      clearTimers();
+      if(Notification.permission !== 'granted') return;
+      const meds = load();
+      const now = new Date();
+      const today = todayStr();
+      meds.forEach(m=>{
+        m.times.forEach(tm=>{
+          const [hh,mm] = tm.split(':').map(Number);
+          const t = new Date(); t.setHours(hh,mm,0,0);
+          // if time already passed today, we skip (or you might schedule for tomorrow if preferred)
+          if(t <= now) return;
+          const ms = t - now;
+          const id = setTimeout(()=>{
+            showNotification(`Time to take ${m.name}`, `${m.name} — scheduled at ${tm}`);
+          }, ms);
+          scheduledTimers.push(id);
+        })
+      });
+      renderUpcoming();
+    }
+
+    function showNotification(title, body){
+      try{
+        const n = new Notification(title, {body, badge:null});
+        // When a user clicks, focus tab
+        n.onclick = ()=>{window.focus();}
+      }catch(e){console.warn('Notification failed', e)}
+    }
+
+    // When page gains focus or when storage changes (another tab modified data), re-render and re-schedule.
+    window.addEventListener('focus',()=>{ render(); scheduleAllReminders(); });
+    window.addEventListener('storage',()=>{ render(); scheduleAllReminders(); });
+
+    // On load, ensure data exists and schedule reminders
+    render();
+    scheduleAllReminders();
+
+    // Helpful: press 't' to send a test notification
+    window.addEventListener('keydown',e=>{ if(e.key==='t'){ showNotification('Test reminder','This is a test.')} });
+
+    // Optional: code to reset daily logs at midnight (runs only while page open). This will not run if the page is closed.
+    function scheduleMidnightReset(){
+      const now=new Date(); const next=new Date(); next.setHours(24,0,5,0); // shortly after midnight
+      const ms = next-now; setTimeout(()=>{ // clear today's counts? we keep logs but UI will reflect today
+        render(); scheduleMidnightReset();
+      }, ms);
+    }
+    scheduleMidnightReset();
+
+    // Note: for persistent background reminders when the page is closed you need a service worker + push notifications
+    // or a native mobile app. This demo keeps everything on the front-end for simplicity.
+  </script>
+</body>
+</html>
